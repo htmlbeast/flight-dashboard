@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
+import plotly.express as px
 
 # === CONFIG ===
 st.set_page_config(page_title="O'Hare Live Flight Delays", layout="wide")
@@ -34,7 +35,8 @@ def fetch_live_delays():
                 "Flight": flight["flight"]["iata"],
                 "Destination": flight["arrival"]["airport"],
                 "Scheduled": flight["departure"]["scheduled"],
-                "Delay (min)": delay
+                "Delay (min)": delay,
+                "Terminal": flight.get("departure", {}).get("terminal", "Unknown"),
             })
     df = pd.DataFrame(delays)
     return df, None
@@ -65,3 +67,18 @@ else:
         df.style.applymap(highlight_delay, subset=["Delay (min)"]),
         use_container_width=True
     )
+
+    # === Chart: Delays by Airline ===
+    airline_counts = df["Airline"].value_counts().reset_index()
+    airline_counts.columns = ["Airline", "Delayed Flights"]
+    st.subheader("✈️ Delays by Airline")
+    fig_airlines = px.bar(airline_counts, x="Airline", y="Delayed Flights", color="Airline")
+    st.plotly_chart(fig_airlines, use_container_width=True)
+
+    # === Chart: Delays by Terminal ===
+    terminal_counts = df["Terminal"].value_counts().reset_index()
+    terminal_counts.columns = ["Terminal", "Delayed Flights"]
+    st.subheader("🧭 Delays by Terminal")
+    fig_terminals = px.bar(terminal_counts, x="Terminal", y="Delayed Flights", color="Terminal")
+    st.plotly_chart(fig_terminals, use_container_width=True)
+
