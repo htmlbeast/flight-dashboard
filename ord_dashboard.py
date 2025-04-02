@@ -44,20 +44,28 @@ def get_weather():
         print("Weather error:", e)
         return None
 
-# === Call-Off Logic ===
-def should_call_off(flight_count, weather):
-    bad_weather = weather and (
-        "fog" in weather["summary"].lower()
-        or "storm" in weather["summary"].lower()
-        or "snow" in weather["summary"].lower()
-        or weather["visibility_mi"] < 1.5
-    )
-    low_traffic = flight_count is not None and flight_count < 10
+# === Call-Off Score (ML-style logic) ===
+def calculate_calloff_score(flight_count, weather):
+    score = 0
 
-    return bad_weather or low_traffic
+    if flight_count is not None and flight_count < 10:
+        score += 40
+
+    if weather and weather["visibility_mi"] < 1.5:
+        score += 25
+
+    if weather and any(term in weather["summary"].lower() for term in ["fog", "storm", "snow", "rain"]):
+        score += 25
+
+    if weather:
+        temp = float(weather["temp"].replace("°F", ""))
+        if temp < 15 or temp > 90:
+            score += 10
+
+    return min(score, 100)
 
 # === MAIN UI ===
-st.title("📵 Call-Off Command Center (OpenSky Edition)")
+st.title("📵 Call-Off Command Center (OpenSky + Weather)")
 st.caption(f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 flight_count = get_opensky_departures()
@@ -82,10 +90,15 @@ with col2:
     else:
         st.error("❌ Weather data unavailable")
 
-# === FINAL CALL-OFF DECISION ===
+# === Final Verdict ===
 st.markdown("---")
-if should_call_off(flight_count, weather):
-    st.error("🚨 Conditions suggest calling off is justified.")
+score = calculate_calloff_score(flight_count, weather)
+st.subheader("🧠 Call-Off Score")
+
+if score >= 70:
+    st.error(f"🚨 {score}/100 — Call-Off Recommended")
+elif 40 <= score < 70:
+    st.warning(f"⚠️ {score}/100 — Borderline. Use your best judgment.")
 else:
-    st.success("✅ Low disruption. You should probably go in today.")
+    st.success(f"✅ {score}/100 — Safe to report in today")
 
