@@ -1,84 +1,91 @@
 import streamlit as st
 import requests
-import pandas as pd
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
-import plotly.express as px
 
 # === CONFIG ===
-st.set_page_config(page_title="O'Hare Live Flight Delays", layout="wide")
-API_KEY = "d266d79cc749a21a6a2de3c3dfd16eb5"  # Replace if needed
+st.set_page_config(page_title="Call-Off Command Center", layout="wide")
+WEATHER_KEY = "4cc93eeebf406d8b11fb2f24142bde9d"
 
 # === AUTO-REFRESH ===
-st_autorefresh(interval=60 * 1000, key="auto_refresh")
+st_autorefresh(interval=60 * 1000, key="refresh")
 
-# === GET LIVE DATA ===
+# === Get Live Flight Count from OpenSky ===
 @st.cache_data(ttl=60)
-def fetch_live_delays():
-    url = "http://api.aviationstack.com/v1/flights"
-    params = {
-        "access_key": API_KEY,
-        "dep_iata": "ORD",
-        "flight_status": "active",  # Only get active flights
-        "limit": 100,
-    }
-    response = requests.get(url, params=params)
-    if response.status_code != 200:
-        return None, "API request failed"
-    data = response.json().get("data", [])
-    delays = []
-    for flight in data:
-        delay = flight.get("departure", {}).get("delay")
-        if delay and delay > 0:
-            delays.append({
-                "Airline": flight["airline"]["name"],
-                "Flight": flight["flight"]["iata"],
-                "Destination": flight["arrival"]["airport"],
-                "Scheduled": flight["departure"]["scheduled"],
-                "Delay (min)": delay,
-                "Terminal": flight.get("departure", {}).get("terminal", "Unknown"),
-            })
-    df = pd.DataFrame(delays)
-    return df, None
+def get_opensky_departures():
+    url = "https://opensky-network.org/api/states/all"
+    params = {"lamin": 41.95, "lamax": 42.05, "lomin": -87.95, "lomax": -87.80}  # O'Hare bounding box
+    try:
+        res = requests.get(url, params=params, timeout=10)
+        data = res.json()
+        flights = data.get("states", [])
+        return len(flights)
+    except Exception as e:
+        print("OpenSky error:", e)
+        return None
+
+# === Get Weather Conditions ===
+@st.cache_data(ttl=60)
+def get_weather():
+    url = f"https://api.openweathermap.org/data/2.5/weather?q=Chicago&appid={WEATHER_KEY}&units=imperial"
+    try:
+        res = requests.get(url, timeout=10)
+        data = res.json()
+        weather = data["weather"][0]["main"]
+        desc = data["weather"][0]["description"]
+        temp = data["main"]["temp"]
+        visibility = data.get("visibility", 10000)  # meters
+        return {
+            "summary": f"{weather} ({desc})",
+            "temp": f"{temp}°F",
+            "visibility_mi": round(visibility / 1609, 1)
+        }
+    except Exception as e:
+        print("Weather error:", e)
+        return None
+
+# === Call-Off Logic ===
+def should_call_off(flight_count, weather):
+    bad_weather = weather and (
+        "fog" in weather["summary"].lower()
+        or "storm" in weather["summary"].lower()
+        or "snow" in weather["summary"].lower()
+        or weather["visibility_mi"] < 1.5
+    )
+    low_traffic = flight_count is not None and flight_count < 10
+
+    return bad_weather or low_traffic
 
 # === MAIN UI ===
-st.title("🛫 O'Hare Live Flight Delays Dashboard")
-st.caption(f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Auto-refreshes every 60 sec)")
+st.title("📵 Call-Off Command Center (OpenSky Edition)")
+st.caption(f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-df, error = fetch_live_delays()
+flight_count = get_opensky_departures()
+weather = get_weather()
 
-if error:
-    st.error(f"❌ {error}")
-elif df.empty:
-    st.success("✅ No current delays at O'Hare!")
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("🛫 Live Departures near O'Hare")
+    if flight_count is not None:
+        st.metric("Live Aircraft Tracked", flight_count)
+        st.caption("From OpenSky Network (within O’Hare airspace)")
+    else:
+        st.error("❌ Could not retrieve flight data.")
+
+with col2:
+    st.subheader("🌦️ Current Weather (Chicago)")
+    if weather:
+        st.text(f"Condition: {weather['summary']}")
+        st.text(f"Temperature: {weather['temp']}")
+        st.text(f"Visibility: {weather['visibility_mi']} mi")
+    else:
+        st.error("❌ Weather data unavailable")
+
+# === FINAL CALL-OFF DECISION ===
+st.markdown("---")
+if should_call_off(flight_count, weather):
+    st.error("🚨 Conditions suggest calling off is justified.")
 else:
-    severe = df[df["Delay (min)"] >= 60]
-    st.metric(label="Total Delayed Flights", value=len(df))
-    st.metric(label="Severely Delayed (60+ min)", value=len(severe))
-
-    def highlight_delay(val):
-        if val >= 60:
-            return 'background-color: red; color: white'
-        elif val >= 30:
-            return 'background-color: orange'
-        return ''
-
-    st.dataframe(
-        df.style.applymap(highlight_delay, subset=["Delay (min)"]),
-        use_container_width=True
-    )
-
-    # === Chart: Delays by Airline ===
-    airline_counts = df["Airline"].value_counts().reset_index()
-    airline_counts.columns = ["Airline", "Delayed Flights"]
-    st.subheader("✈️ Delays by Airline")
-    fig_airlines = px.bar(airline_counts, x="Airline", y="Delayed Flights", color="Airline")
-    st.plotly_chart(fig_airlines, use_container_width=True)
-
-    # === Chart: Delays by Terminal ===
-    terminal_counts = df["Terminal"].value_counts().reset_index()
-    terminal_counts.columns = ["Terminal", "Delayed Flights"]
-    st.subheader("🧭 Delays by Terminal")
-    fig_terminals = px.bar(terminal_counts, x="Terminal", y="Delayed Flights", color="Terminal")
-    st.plotly_chart(fig_terminals, use_container_width=True)
+    st.success("✅ Low disruption. You should probably go in today.")
 
