@@ -4,11 +4,20 @@ from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # === CONFIG ===
 st.set_page_config(page_title="Call-Off Command Center", layout="wide")
 WEATHER_KEY = "4cc93eeebf406d8b11fb2f24142bde9d"
 LOG_FILE = "calloff_log.csv"
+
+# === EMAIL SETTINGS ===
+EMAIL_FROM = "christianrivas799@gmail.com"
+EMAIL_TO = "christianrivas799@gmail.com"
+EMAIL_PASSWORD = "dyrkayjijwjxwzlp"  # Your 16-char Gmail App Password (no spaces)
+EMAIL_SENT_MARKER = "/tmp/calloff_email_sent.flag"
 
 # === AUTO-REFRESH ===
 st_autorefresh(interval=60 * 1000, key="refresh")
@@ -47,7 +56,7 @@ def get_weather():
         print("Weather error:", e)
         return None
 
-# === Call-Off Score (ML-style logic) ===
+# === Call-Off Score Logic ===
 def calculate_calloff_score(flight_count, weather):
     score = 0
 
@@ -67,7 +76,42 @@ def calculate_calloff_score(flight_count, weather):
 
     return min(score, 100)
 
-# === Log Call-Off Scores to CSV ===
+# === Email Alert System ===
+def send_email_alert(score, weather, flights):
+    try:
+        subject = f"🚨 Call-Off Score Alert: {score}/100"
+        body = f"""🚨 Today's Call-Off Score is {score}/100
+
+Live flights near O'Hare: {flights}
+Weather: {weather['summary']}
+Visibility: {weather['visibility_mi']} mi
+Temperature: {weather['temp']}
+
+Check the dashboard:
+https://flight-dashboard-mweb2fgh8te8z4soedrrx4.streamlit.app/
+
+– Call-Off Command Center
+"""
+
+        msg = MIMEMultipart()
+        msg["From"] = EMAIL_FROM
+        msg["To"] = EMAIL_TO
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_FROM, EMAIL_PASSWORD)
+            server.send_message(msg)
+
+        with open(EMAIL_SENT_MARKER, "w") as f:
+            f.write(datetime.now().strftime("%Y-%m-%d"))
+
+        print("✅ Email sent!")
+
+    except Exception as e:
+        print("❌ Email failed:", e)
+
+# === Log Call-Off Score to CSV ===
 def log_score(score, flight_count, weather):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = {
@@ -79,11 +123,10 @@ def log_score(score, flight_count, weather):
         "temp": weather["temp"] if weather else "N/A"
     }
 
-    # Append only if this timestamp isn't already in the log
     if os.path.exists(LOG_FILE):
         df = pd.read_csv(LOG_FILE)
         if not df.empty and now in df["timestamp"].values:
-            return  # Avoid duplicate logs
+            return
         df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
     else:
         df = pd.DataFrame([entry])
@@ -103,7 +146,7 @@ with col1:
     st.subheader("🛫 Live Departures near O'Hare")
     if flight_count is not None:
         st.metric("Live Aircraft Tracked", flight_count)
-        st.caption("From OpenSky Network (within O’Hare airspace)")
+        st.caption("From OpenSky Network (O’Hare airspace)")
     else:
         st.error("❌ Could not retrieve flight data.")
 
@@ -116,11 +159,18 @@ with col2:
     else:
         st.error("❌ Weather data unavailable")
 
-# === Final Verdict ===
+# === Final Score ===
 st.markdown("---")
 score = calculate_calloff_score(flight_count, weather)
 log_score(score, flight_count, weather)
 
+# Email alert logic
+today = datetime.now().strftime("%Y-%m-%d")
+if score >= 70:
+    if not os.path.exists(EMAIL_SENT_MARKER) or open(EMAIL_SENT_MARKER).read().strip() != today:
+        send_email_alert(score, weather, flight_count)
+
+# === Display Score ===
 st.subheader("🧠 Call-Off Score")
 if score >= 70:
     st.error(f"🚨 {score}/100 — Call-Off Recommended")
@@ -129,7 +179,7 @@ elif 40 <= score < 70:
 else:
     st.success(f"✅ {score}/100 — Safe to report in today")
 
-# === Score Chart ===
+# === Score History ===
 if os.path.exists(LOG_FILE):
     log_df = pd.read_csv(LOG_FILE)
     log_df["timestamp"] = pd.to_datetime(log_df["timestamp"])
@@ -138,5 +188,5 @@ if os.path.exists(LOG_FILE):
     st.markdown("---")
     st.subheader("📈 Call-Off Score History")
     st.line_chart(log_df.set_index("timestamp")["score"])
-    with st.expander("View full log"):
+    with st.expander("📋 View Raw Data"):
         st.dataframe(log_df[::-1], use_container_width=True)
