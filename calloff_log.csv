@@ -1,0 +1,4 @@
+timestamp,score,flights,condition,visibility_mi,temp,called_off
+2025-03-30 08:00:00,80,10,Fog,1.2,35°F,Yes
+2025-03-30 09:00:00,60,5,Snow,0.9,20°F,No
+2025-03-30 10:00:00,75,8,Rain,1.5,45°F,Yes
