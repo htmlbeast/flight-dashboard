@@ -16,7 +16,7 @@ LOG_FILE = "calloff_log.csv"
 # === EMAIL SETTINGS ===
 EMAIL_FROM = "christianrivas799@gmail.com"
 EMAIL_TO = "christianrivas799@gmail.com"
-EMAIL_PASSWORD = "dyrkayjijwjxwzlp"  # Your 16-char Gmail App Password (no spaces)
+EMAIL_PASSWORD = "dyrkayjijwjxwzlp"
 EMAIL_SENT_MARKER = "/tmp/calloff_email_sent.flag"
 
 # === AUTO-REFRESH ===
@@ -26,7 +26,7 @@ st_autorefresh(interval=60 * 1000, key="refresh")
 @st.cache_data(ttl=60)
 def get_opensky_departures():
     url = "https://opensky-network.org/api/states/all"
-    params = {"lamin": 41.95, "lamax": 42.05, "lomin": -87.95, "lomax": -87.80}  # O'Hare bounding box
+    params = {"lamin": 41.95, "lamax": 42.05, "lomin": -87.95, "lomax": -87.80}
     try:
         res = requests.get(url, params=params, timeout=10)
         data = res.json()
@@ -46,7 +46,7 @@ def get_weather():
         weather = data["weather"][0]["main"]
         desc = data["weather"][0]["description"]
         temp = data["main"]["temp"]
-        visibility = data.get("visibility", 10000)  # meters
+        visibility = data.get("visibility", 10000)
         return {
             "summary": f"{weather} ({desc})",
             "temp": f"{temp}°F",
@@ -56,24 +56,19 @@ def get_weather():
         print("Weather error:", e)
         return None
 
-# === Call-Off Score Logic ===
+# === Call-Off Score ===
 def calculate_calloff_score(flight_count, weather):
     score = 0
-
     if flight_count is not None and flight_count < 10:
         score += 40
-
     if weather and weather["visibility_mi"] < 1.5:
         score += 25
-
     if weather and any(term in weather["summary"].lower() for term in ["fog", "storm", "snow", "rain"]):
         score += 25
-
     if weather:
         temp = float(weather["temp"].replace("°F", ""))
         if temp < 15 or temp > 90:
             score += 10
-
     return min(score, 100)
 
 # === Email Alert System ===
@@ -92,7 +87,6 @@ https://flight-dashboard-mweb2fgh8te8z4soedrrx4.streamlit.app/
 
 – Call-Off Command Center
 """
-
         msg = MIMEMultipart()
         msg["From"] = EMAIL_FROM
         msg["To"] = EMAIL_TO
@@ -111,8 +105,8 @@ https://flight-dashboard-mweb2fgh8te8z4soedrrx4.streamlit.app/
     except Exception as e:
         print("❌ Email failed:", e)
 
-# === Log Call-Off Score to CSV ===
-def log_score(score, flight_count, weather):
+# === Log Scores + Actions ===
+def log_score(score, flight_count, weather, user_action):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = {
         "timestamp": now,
@@ -120,7 +114,8 @@ def log_score(score, flight_count, weather):
         "flights": flight_count,
         "condition": weather["summary"] if weather else "N/A",
         "visibility_mi": weather["visibility_mi"] if weather else "N/A",
-        "temp": weather["temp"] if weather else "N/A"
+        "temp": weather["temp"] if weather else "N/A",
+        "called_off": user_action
     }
 
     if os.path.exists(LOG_FILE):
@@ -133,36 +128,43 @@ def log_score(score, flight_count, weather):
 
     df.to_csv(LOG_FILE, index=False)
 
-# === MAIN UI ===
-st.title("📵 Call-Off Command Center (OpenSky + Weather)")
+# === UI ===
+st.title("📵 Call-Off Command Center")
 st.caption(f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 flight_count = get_opensky_departures()
 weather = get_weather()
 
 col1, col2 = st.columns(2)
-
 with col1:
     st.subheader("🛫 Live Departures near O'Hare")
     if flight_count is not None:
         st.metric("Live Aircraft Tracked", flight_count)
-        st.caption("From OpenSky Network (O’Hare airspace)")
+        st.caption("Data from OpenSky Network")
     else:
         st.error("❌ Could not retrieve flight data.")
 
 with col2:
-    st.subheader("🌦️ Current Weather (Chicago)")
+    st.subheader("🌦️ Current Weather")
     if weather:
         st.text(f"Condition: {weather['summary']}")
         st.text(f"Temperature: {weather['temp']}")
         st.text(f"Visibility: {weather['visibility_mi']} mi")
     else:
-        st.error("❌ Weather data unavailable")
+        st.error("❌ Weather unavailable")
 
-# === Final Score ===
+# === Ask if user actually called off ===
+user_action = st.radio(
+    "Did you call off today?",
+    options=["Not yet", "Yes", "No"],
+    index=0,
+    horizontal=True
+)
+
+# === Score Logic ===
 st.markdown("---")
 score = calculate_calloff_score(flight_count, weather)
-log_score(score, flight_count, weather)
+log_score(score, flight_count, weather, user_action)
 
 # Email alert logic
 today = datetime.now().strftime("%Y-%m-%d")
@@ -170,7 +172,7 @@ if score >= 70:
     if not os.path.exists(EMAIL_SENT_MARKER) or open(EMAIL_SENT_MARKER).read().strip() != today:
         send_email_alert(score, weather, flight_count)
 
-# === Display Score ===
+# === Final Score Display ===
 st.subheader("🧠 Call-Off Score")
 if score >= 70:
     st.error(f"🚨 {score}/100 — Call-Off Recommended")
@@ -179,14 +181,14 @@ elif 40 <= score < 70:
 else:
     st.success(f"✅ {score}/100 — Safe to report in today")
 
-# === Score History ===
+# === Score History Chart ===
 if os.path.exists(LOG_FILE):
     log_df = pd.read_csv(LOG_FILE)
     log_df["timestamp"] = pd.to_datetime(log_df["timestamp"])
     log_df = log_df.sort_values("timestamp", ascending=True)
 
     st.markdown("---")
-    st.subheader("📈 Call-Off Score History")
+    st.subheader("📈 Score History")
     st.line_chart(log_df.set_index("timestamp")["score"])
-    with st.expander("📋 View Raw Data"):
+    with st.expander("📋 Full Log"):
         st.dataframe(log_df[::-1], use_container_width=True)
