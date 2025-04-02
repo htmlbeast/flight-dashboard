@@ -2,10 +2,13 @@ import streamlit as st
 import requests
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
+import pandas as pd
+import os
 
 # === CONFIG ===
 st.set_page_config(page_title="Call-Off Command Center", layout="wide")
 WEATHER_KEY = "4cc93eeebf406d8b11fb2f24142bde9d"
+LOG_FILE = "calloff_log.csv"
 
 # === AUTO-REFRESH ===
 st_autorefresh(interval=60 * 1000, key="refresh")
@@ -64,6 +67,29 @@ def calculate_calloff_score(flight_count, weather):
 
     return min(score, 100)
 
+# === Log Call-Off Scores to CSV ===
+def log_score(score, flight_count, weather):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry = {
+        "timestamp": now,
+        "score": score,
+        "flights": flight_count,
+        "condition": weather["summary"] if weather else "N/A",
+        "visibility_mi": weather["visibility_mi"] if weather else "N/A",
+        "temp": weather["temp"] if weather else "N/A"
+    }
+
+    # Append only if this timestamp isn't already in the log
+    if os.path.exists(LOG_FILE):
+        df = pd.read_csv(LOG_FILE)
+        if not df.empty and now in df["timestamp"].values:
+            return  # Avoid duplicate logs
+        df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
+    else:
+        df = pd.DataFrame([entry])
+
+    df.to_csv(LOG_FILE, index=False)
+
 # === MAIN UI ===
 st.title("📵 Call-Off Command Center (OpenSky + Weather)")
 st.caption(f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -93,8 +119,9 @@ with col2:
 # === Final Verdict ===
 st.markdown("---")
 score = calculate_calloff_score(flight_count, weather)
-st.subheader("🧠 Call-Off Score")
+log_score(score, flight_count, weather)
 
+st.subheader("🧠 Call-Off Score")
 if score >= 70:
     st.error(f"🚨 {score}/100 — Call-Off Recommended")
 elif 40 <= score < 70:
@@ -102,3 +129,14 @@ elif 40 <= score < 70:
 else:
     st.success(f"✅ {score}/100 — Safe to report in today")
 
+# === Score Chart ===
+if os.path.exists(LOG_FILE):
+    log_df = pd.read_csv(LOG_FILE)
+    log_df["timestamp"] = pd.to_datetime(log_df["timestamp"])
+    log_df = log_df.sort_values("timestamp", ascending=True)
+
+    st.markdown("---")
+    st.subheader("📈 Call-Off Score History")
+    st.line_chart(log_df.set_index("timestamp")["score"])
+    with st.expander("View full log"):
+        st.dataframe(log_df[::-1], use_container_width=True)
